@@ -1,7 +1,0 @@
-{"ts": 1785331444.2864704, "chat_id": 12345, "event": "start", "history": [{"role": "user", "content": "What is 2 + 2? Reply with ONLY this JSON object and nothing else: {\"answer\": <number>, \"log_url\": \"<url>\"}"}]}
-{"ts": 1785331447.3485723, "chat_id": 12345, "event": "error", "error": "Error code: 401 - {'message': 'Bearer token is invalid: JWSInvalid: Invalid Compact JWS'}"}
-{"ts": 1785331447.349845, "chat_id": 12345, "event": "reply", "reply": "{\"answer\": {\"error\": \"agent failed to produce an answer\"}, \"log_url\": \"/logs/chat_12345.jsonl\"}"}
-{"ts": 1785331866.1283607, "chat_id": 12345, "event": "start", "history": [{"role": "user", "content": "What is 2 + 2? Reply with ONLY this JSON object and nothing else: {\"answer\": <number>, \"log_url\": \"<url>\"}"}]}
-{"ts": 1785331868.7510555, "chat_id": 12345, "event": "llm_response", "turn": 0, "content": null, "tool_calls": [{"id": "call_clV5CMzBHXHlaNzvTKXpCUVa", "function": {"arguments": "{\"answer\":4,\"log_url\":\"\"}", "name": "submit_answer"}, "type": "function"}]}
-{"ts": 1785331868.7525473, "chat_id": 12345, "event": "submit_answer", "answer": 4}
-{"ts": 1785331868.7537634, "chat_id": 12345, "event": "reply", "reply": "{\"answer\": 4, \"log_url\": \"/logs/chat_12345.jsonl\"}"}
