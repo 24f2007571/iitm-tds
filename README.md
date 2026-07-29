@@ -37,7 +37,7 @@ key in your env vars — anything OpenAI-compatible works.
 git init
 git add .
 git commit -m "Data-analyst Telegram bot"
-git remote add origin https://github.com/<you>/<repo>.git
+git remote add origin https://github.com/24f2007571/iitm-tds.git
 git push -u origin main
 ```
 
