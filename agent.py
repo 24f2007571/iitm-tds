@@ -17,6 +17,21 @@ import os
 from openai import OpenAI
 
 from sandbox import PythonSandbox
+import requests
+from bs4 import BeautifulSoup
+
+def web_search(query, max_results=5):
+    resp = requests.post(
+        "https://html.duckduckgo.com/html/",
+        data={"q": query},
+        headers={"User-Agent": "Mozilla/5.0"},
+        timeout=15,
+    )
+    soup = BeautifulSoup(resp.text, "html.parser")
+    results = []
+    for a in soup.select("a.result__a")[:max_results]:
+        results.append({"title": a.get_text(strip=True), "url": a.get("href")})
+    return results
 
 MODEL = os.environ.get("AGENT_MODEL", "gpt-4o-mini")
 MAX_TURNS = int(os.environ.get("AGENT_MAX_TURNS", "12"))
@@ -70,6 +85,24 @@ TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "web_search",
+            "description": (
+                "Search the web to find the correct current URL for a dataset or source, "
+                "instead of guessing from memory (guessed URLs are often stale/dead). "
+                "Returns a list of {title, url}."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Search query."}
+                },
+                "required": ["query"],
+            },
+        },
+    },
 ]
 
 SYSTEM_PROMPT = """You are a meticulous data-analyst agent, answering questions sent to you \
@@ -83,14 +116,16 @@ yourself. The message will also spell out the EXACT JSON shape expected for the 
 Some conversations are multi-turn: a short back-and-forth. Always answer the LAST \
 message, using earlier messages as context if relevant.
 
-You have two tools:
+You have three tools:
 - run_python: fetch, parse, and analyze data (pandas/numpy/requests available). Use \
   print() or a trailing bare expression to inspect intermediate results. State \
   persists across calls, so work incrementally: fetch first, inspect the shape and \
   columns, then compute.
+- web_search: find the correct current URL for a dataset before fetching it, instead of \
+  guessing from memory. Guessed URLs are frequently dead or outdated — use this whenever \
+  you're not 100% sure of the exact link.
 - submit_answer: call this exactly once, when confident, with ONLY the value for the \
   "answer" key, in the exact shape requested. No extra keys, no prose.
-
 Ground rules:
 - Never fabricate numbers or facts. Compute everything from data you actually fetched \
   and inspected.
@@ -171,6 +206,15 @@ def run_agent(history, logger):
                     "tool_call_id": tc.id,
                     "content": json.dumps(result)[:6000],
                 })
+            elif name == "web_search":
+                query = args.get("query", "")
+                results = web_search(query)
+                logger.log({"event": "web_search", "query": query, "results": results})
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc.id,
+                    "content": json.dumps(results)[:6000],
+                })    
             else:
                 messages.append({
                     "role": "tool",
