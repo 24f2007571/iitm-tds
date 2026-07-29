@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: data-analyst-telegram-bot
+    env: python
+    plan: free
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "gunicorn app:app --timeout 120 --workers 1 --threads 4"
+    envVars:
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: AIPIPE_TOKEN
+        sync: false
+      - key: OPENAI_BASE_URL
+        value: https://aipipe.org/openai/v1
+      - key: AGENT_MODEL
+        value: gpt-4o-mini
+      - key: HISTORY_LIMIT
+        value: "6"
+      - key: AGENT_MAX_TURNS
+        value: "12"
