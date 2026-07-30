@@ -4,18 +4,17 @@ The data-analyst agent: a ReAct-style loop over an OpenAI-compatible chat model
 but any OpenAI-compatible endpoint works - just change OPENAI_BASE_URL).
 
 The model has four tools:
-  - run_python:       execute code in a persistent sandbox (pandas/numpy/requests/etc)
-  - web_search:       general web search (DuckDuckGo-backed)
-  - wikipedia_search:  direct Wikipedia search
-  - submit_answer:    end the loop and return the final answer value
+  - run_python:        execute code in a persistent sandbox (pandas/numpy/requests/etc)
+  - web_search:        general web search (DuckDuckGo) - can be unreliable
+  - wikipedia_search:  reliable Wikipedia search, preferred for factual/statistical Qs
+  - submit_answer:     end the loop and return the final answer value
 
-The caller (bot.py) is responsible for wrapping the returned answer into the
+The caller (app.py) is responsible for wrapping the returned answer into the
 final {"answer": ..., "log_url": ...} JSON the Telegram bot replies with.
 """
 
 import json
 import os
-from urllib.parse import urlparse, parse_qs, unquote
 
 from openai import OpenAI
 
@@ -25,77 +24,38 @@ from bs4 import BeautifulSoup
 
 
 def web_search(query, max_results=5):
-    """Search the web via DuckDuckGo's lite/html endpoints (no API key needed).
-
-    DuckDuckGo wraps every outbound result link in a redirect like
-    //duckduckgo.com/l/?uddg=<url-encoded-destination>&rut=...
-    We unwrap that to get the real destination URL. (A previous version of
-    this function filtered out any link containing "duckduckgo.com" and also
-    required hrefs to start with "http" - since these redirect links are
-    protocol-relative ("//...") and live on duckduckgo.com, EVERY result was
-    being silently dropped, regardless of query. Fixed here.)
-    """
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
 
-    def resolve_url(href):
-        if href.startswith("//"):
-            href = "https:" + href
-        parsed = urlparse(href)
-        if "duckduckgo.com" in parsed.netloc and parsed.path == "/l/":
-            qs = parse_qs(parsed.query)
-            if "uddg" in qs:
-                return unquote(qs["uddg"][0])
-            return None  # some other duckduckgo.com internal link, not a result
-        return href
-
-    def parse_links(html):
+    def parse_links(html, exclude_domain):
         soup = BeautifulSoup(html, "html.parser")
         results = []
         seen = set()
         for a in soup.find_all("a", href=True):
-            real_url = resolve_url(a["href"])
-            if not real_url or not real_url.startswith("http"):
+            href = a["href"]
+            if not href.startswith("http") or exclude_domain in href:
                 continue
             title = a.get_text(strip=True)
-            if not title or real_url in seen:
+            if not title or href in seen:
                 continue
-            seen.add(real_url)
-            results.append({"title": title, "url": real_url})
+            seen.add(href)
+            results.append({"title": title, "url": href})
             if len(results) >= max_results:
                 break
         return results
 
-    diagnostics = []  # only surfaced if every endpoint fails to yield results
-
-    for url in [
-        "https://lite.duckduckgo.com/lite/",
-        "https://html.duckduckgo.com/html/",
+    for url, exclude in [
+        ("https://lite.duckduckgo.com/lite/", "duckduckgo.com"),
+        ("https://html.duckduckgo.com/html/", "duckduckgo.com"),
     ]:
         try:
             resp = requests.post(url, data={"q": query}, headers=headers, timeout=15)
-            results = parse_links(resp.text)
-            diagnostics.append({
-                "endpoint": url,
-                "status_code": resp.status_code,
-                "response_length": len(resp.text),
-                "anchor_tag_count": resp.text.count("<a "),
-                "parsed_results": len(results),
-            })
+            results = parse_links(resp.text, exclude)
             if results:
                 return results
-        except requests.RequestException as e:
-            diagnostics.append({"endpoint": url, "error": str(e)})
+        except requests.RequestException:
             continue
 
-    # Every endpoint failed to yield results - surface WHY, so the JSONL log
-    # can distinguish "DDG blocked this IP / served a captcha" (status 200 but
-    # anchor_tag_count near 0, or status 403/429) from "parsing logic is wrong
-    # again" (status 200, normal anchor_tag_count, but parsed_results is 0).
-    return [{
-        "title": "search returned no results",
-        "url": "",
-        "diagnostics": diagnostics,
-    }]
+    return [{"title": "search returned no results", "url": ""}]
 
 
 def wikipedia_search(query, max_results=5):
@@ -137,10 +97,12 @@ TOOLS = [
             "name": "run_python",
             "description": (
                 "Execute Python code in a persistent sandbox. pandas (pd), numpy (np), "
-                "requests, json, math, re, io, and datetime are pre-imported. State "
-                "persists between calls in this conversation, so you can build up a "
-                "solution over several steps. Leave a bare expression on the last line "
-                "(or use print()) to see its value in the result."
+                "requests, json, math, re, io, and datetime are pre-imported, plus "
+                "three helper functions: fetch_url(url), extract_pdf_text(url), and "
+                "fetch_wikipedia_tables(url). State persists between calls in this "
+                "conversation, so you can build up a solution over several steps. "
+                "Leave a bare expression on the last line (or use print()) to see its "
+                "value in the result."
             ),
             "parameters": {
                 "type": "object",
@@ -181,7 +143,8 @@ TOOLS = [
             "description": (
                 "Search the web to find the correct current URL for a dataset or source, "
                 "instead of guessing from memory (guessed URLs are often stale/dead). "
-                "Returns a list of {title, url}."
+                "Returns a list of {title, url}. Can be unreliable - see system prompt "
+                "guidance on when to stop retrying it."
             ),
             "parameters": {
                 "type": "object",
@@ -226,7 +189,7 @@ Some conversations are multi-turn: a short back-and-forth. Always answer the LAS
 message, using earlier messages as context if relevant.
 
 You have four tools:
-- run_python: fetch, parse, and analyze data (pandas/numpy/requests available). Two \
+- run_python: fetch, parse, and analyze data (pandas/numpy/requests available). Three \
   helper functions are pre-loaded for you - USE THESE instead of guessing at library \
   calls that may not exist: \
   (1) fetch_url(url) - like requests.get, but with a browser User-Agent (needed for \
@@ -234,17 +197,21 @@ You have four tools:
   broken certificate chains. \
   (2) extract_pdf_text(url) - downloads a PDF and returns its full text. pd.read_pdf \
   does NOT exist and PyPDF2 is NOT installed - always use extract_pdf_text for PDFs. \
-  For Wikipedia tables specifically, use fetch_wikipedia_tables(url) - do NOT call \
-  pd.read_html(url) directly, it will get a 403 Forbidden without the right headers. \
+  (3) fetch_wikipedia_tables(url) - fetches a Wikipedia page and returns ALL its \
+  tables as a list of DataFrames in one call. ALWAYS use this for Wikipedia tables - \
+  never call pd.read_html(url) directly on a Wikipedia URL, it will get a 403 error. \
   Use print() or a trailing bare expression to inspect intermediate results. State \
   persists across calls, so work incrementally: fetch first, inspect the shape and \
   columns, then compute.
 - wikipedia_search: try this FIRST for factual/statistical questions - it's far more \
   reliable than web_search (never blocked). Many India statistics topics have relevant \
-  Wikipedia tables. Fall back to web_search only if Wikipedia doesn't have it.  
+  Wikipedia tables. Fall back to web_search only if Wikipedia doesn't have it.
 - web_search: find the correct current URL for a dataset before fetching it, instead of \
   guessing from memory. Guessed URLs are frequently dead or outdated — use this whenever \
-  you're not 100% sure of the exact link.
+  you're not 100% sure of the exact link. NOTE: web_search frequently returns no \
+  results (search engine blocking) - if it returns "search returned no results" once \
+  or twice, stop retrying it and pivot to wikipedia_search or a direct fetch_url \
+  attempt on a URL you already know instead.
 - submit_answer: call this exactly once, when confident, with ONLY the value for the \
   "answer" key, in the exact shape requested. No extra keys, no prose.
 Ground rules:
@@ -253,18 +220,17 @@ Ground rules:
 - If a fetch fails, check the status code / error and try a reasonable alternative \
   (different URL, different parsing library, different data source) before giving up. \
   A ModuleNotFoundError is not a dead end - it just means try a different available \
-  library (e.g. pdfplumber for PDFs) or a different source entirely (e.g. fetch the \
-  source's HTML page directly with requests+BeautifulSoup and look for tables or \
-  numbers in the text, rather than only trying PDFs).
+  library or helper function (e.g. extract_pdf_text for PDFs, fetch_wikipedia_tables \
+  for Wikipedia) or a different source entirely.
 - Give up (submit an error) only after truly exhausting reasonable options - at least \
   2-3 different sources/approaches - not after a single library import fails.
 - Double-check your computation (e.g. re-derive a max/min, check a groupby result) \
   before calling submit_answer.
-- If, after real, genuine attempts (web_search + run_python fetches) you still cannot \
-  retrieve actual data, you MUST NOT invent, simulate, or hard-code plausible-looking \
-  numbers or facts as a substitute for real data. This includes writing a Python dict/ \
-  DataFrame "based on known values" from memory - that is fabrication, not analysis, \
-  and is strictly forbidden even under time pressure.
+- If, after real, genuine attempts (web_search + wikipedia_search + run_python fetches) \
+  you still cannot retrieve actual data, you MUST NOT invent, simulate, or hard-code \
+  plausible-looking numbers or facts as a substitute for real data. This includes \
+  writing a Python dict/DataFrame "based on known values" from memory - that is \
+  fabrication, not analysis, and is strictly forbidden even under time pressure.
 - If every reasonable data source fails, submit_answer with a clear error object (e.g. \
   {"error": "could not retrieve data: <what failed>"}) instead of a fabricated value. \
   An honest "could not verify" is far better than a confident-looking made-up number.
@@ -339,6 +305,7 @@ def run_agent(history, logger):
                     "tool_call_id": tc.id,
                     "content": json.dumps(result)[:6000],
                 })
+
             elif name == "web_search":
                 query = args.get("query", "")
                 results = web_search(query)
@@ -348,6 +315,7 @@ def run_agent(history, logger):
                     "tool_call_id": tc.id,
                     "content": json.dumps(results)[:6000],
                 })
+
             elif name == "wikipedia_search":
                 query = args.get("query", "")
                 results = wikipedia_search(query)
@@ -357,6 +325,7 @@ def run_agent(history, logger):
                     "tool_call_id": tc.id,
                     "content": json.dumps(results)[:6000],
                 })
+
             else:
                 messages.append({
                     "role": "tool",
