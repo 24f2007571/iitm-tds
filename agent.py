@@ -155,7 +155,13 @@ Ground rules:
 - Never fabricate numbers or facts. Compute everything from data you actually fetched \
   and inspected.
 - If a fetch fails, check the status code / error and try a reasonable alternative \
-  (different URL, different parsing) before giving up.
+  (different URL, different parsing library, different data source) before giving up. \
+  A ModuleNotFoundError is not a dead end - it just means try a different available \
+  library (e.g. pdfplumber for PDFs) or a different source entirely (e.g. fetch the \
+  source's HTML page directly with requests+BeautifulSoup and look for tables or \
+  numbers in the text, rather than only trying PDFs).
+- Give up (submit an error) only after truly exhausting reasonable options - at least \
+  2-3 different sources/approaches - not after a single library import fails.
 - Double-check your computation (e.g. re-derive a max/min, check a groupby result) \
   before calling submit_answer.
 - If, after real, genuine attempts (web_search + run_python fetches) you still cannot \
