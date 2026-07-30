@@ -182,11 +182,17 @@ Some conversations are multi-turn: a short back-and-forth. Always answer the LAS
 message, using earlier messages as context if relevant.
 
 You have four tools:
-- run_python: fetch, parse, and analyze data (pandas/numpy/requests available, plus \
-  fetch_url(url) which is like requests.get but auto-retries with SSL verification \
-  relaxed if a government site's certificate chain is broken - prefer fetch_url over \
-  raw requests.get for .gov.in/.nic.in sites specifically). Use \
-  print() or a trailing bare expression to inspect intermediate results. State \
+- run_python: fetch, parse, and analyze data (pandas/numpy/requests available). Two \
+  helper functions are pre-loaded for you - USE THESE instead of guessing at library \
+  calls that may not exist: \
+  (1) fetch_url(url) - like requests.get, but with a browser User-Agent (needed for \
+  sites like Wikipedia) and automatic SSL-verification fallback for gov.in sites with \
+  broken certificate chains. \
+  (2) extract_pdf_text(url) - downloads a PDF and returns its full text. pd.read_pdf \
+  does NOT exist and PyPDF2 is NOT installed - always use extract_pdf_text for PDFs. \
+  For Wikipedia tables specifically: fetch_url(url).text, then \
+  pd.read_html(io.StringIO(that_text)). \
+  Use print() or a trailing bare expression to inspect intermediate results. State \
   persists across calls, so work incrementally: fetch first, inspect the shape and \
   columns, then compute.
 - wikipedia_search: try this FIRST for factual/statistical questions - it's far more \

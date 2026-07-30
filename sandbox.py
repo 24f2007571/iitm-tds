@@ -28,17 +28,36 @@ class PythonSandbox:
         import io as _io
         import datetime
         import urllib3
+        import pdfplumber
+
+        DEFAULT_HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
 
         def fetch_url(url, **kwargs):
-            """GET a URL, retrying with SSL verification disabled if the
-            normal request fails due to a certificate chain issue (common
-            on some .gov.in sites that misconfigure their certificate
-            chain server-side - no client fix can solve that)."""
+            """GET a URL with a browser-like User-Agent (some sites, like
+            Wikipedia, reject requests without one), retrying with SSL
+            verification disabled if the site has a broken certificate chain
+            (common on some .gov.in sites - a server-side issue no client
+            fix can solve)."""
+            headers = {**DEFAULT_HEADERS, **kwargs.pop("headers", {})}
             try:
-                return requests.get(url, timeout=30, **kwargs)
+                return requests.get(url, timeout=30, headers=headers, **kwargs)
             except requests.exceptions.SSLError:
                 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-                return requests.get(url, timeout=30, verify=False, **kwargs)
+                return requests.get(url, timeout=30, headers=headers, verify=False, **kwargs)
+
+        def extract_pdf_text(url):
+            """Download a PDF and extract its text, page by page, using
+            pdfplumber. Returns a single string with all pages concatenated
+            (page breaks marked). Use this instead of pd.read_pdf (doesn't
+            exist) or PyPDF2 (not installed) for any PDF source."""
+            resp = fetch_url(url)
+            resp.raise_for_status()
+            text_parts = []
+            with pdfplumber.open(_io.BytesIO(resp.content)) as pdf:
+                for i, page in enumerate(pdf.pages):
+                    page_text = page.extract_text() or ""
+                    text_parts.append(f"--- page {i + 1} ---\n{page_text}")
+            return "\n".join(text_parts)
 
         self.globals = {
             "__builtins__": __builtins__,
@@ -46,6 +65,7 @@ class PythonSandbox:
             "np": np,
             "requests": requests,
             "fetch_url": fetch_url,
+            "extract_pdf_text": extract_pdf_text,
             "json": json,
             "math": math,
             "re": re,
