@@ -203,6 +203,11 @@ You have four tools:
   Use print() or a trailing bare expression to inspect intermediate results. State \
   persists across calls, so work incrementally: fetch first, inspect the shape and \
   columns, then compute.
+  Tables from fetch_wikipedia_tables already have correct column labels parsed from \
+  the page - do NOT re-promote a data row to be the header (e.g. via table.iloc[0] as \
+  columns), this shifts all data by one row and corrupts your analysis. Trust the \
+  columns as returned; just clean/rename them directly if column names are awkward \
+  (e.g. table.columns = [...] with the SAME number of columns as before).  
 - wikipedia_search: try this FIRST for factual/statistical questions - it's far more \
   reliable than web_search (never blocked). Many India statistics topics have relevant \
   Wikipedia tables. Fall back to web_search only if Wikipedia doesn't have it.
