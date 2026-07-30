@@ -27,17 +27,25 @@ class PythonSandbox:
         import re
         import io as _io
         import datetime
-        import certifi
-        import os as _os
+        import urllib3
 
-        _os.environ.setdefault("SSL_CERT_FILE", certifi.where())
-        _os.environ.setdefault("REQUESTS_CA_BUNDLE", certifi.where())
+        def fetch_url(url, **kwargs):
+            """GET a URL, retrying with SSL verification disabled if the
+            normal request fails due to a certificate chain issue (common
+            on some .gov.in sites that misconfigure their certificate
+            chain server-side - no client fix can solve that)."""
+            try:
+                return requests.get(url, timeout=30, **kwargs)
+            except requests.exceptions.SSLError:
+                urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+                return requests.get(url, timeout=30, verify=False, **kwargs)
 
         self.globals = {
             "__builtins__": __builtins__,
             "pd": pd,
             "np": np,
             "requests": requests,
+            "fetch_url": fetch_url,
             "json": json,
             "math": math,
             "re": re,

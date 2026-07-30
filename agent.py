@@ -23,40 +23,37 @@ from bs4 import BeautifulSoup
 def web_search(query, max_results=5):
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
 
-    # Try the lite endpoint first - plain text, less likely to be blocked
-    # from cloud/datacenter IPs than the full html.duckduckgo.com page.
-    for attempt in range(2):
+    def parse_links(html, exclude_domain):
+        soup = BeautifulSoup(html, "html.parser")
+        results = []
+        seen = set()
+        for a in soup.find_all("a", href=True):
+            href = a["href"]
+            if not href.startswith("http") or exclude_domain in href:
+                continue
+            title = a.get_text(strip=True)
+            if not title or href in seen:
+                continue
+            seen.add(href)
+            results.append({"title": title, "url": href})
+            if len(results) >= max_results:
+                break
+        return results
+
+    for url, exclude in [
+        ("https://lite.duckduckgo.com/lite/", "duckduckgo.com"),
+        ("https://html.duckduckgo.com/html/", "duckduckgo.com"),
+    ]:
         try:
-            resp = requests.post(
-                "https://lite.duckduckgo.com/lite/",
-                data={"q": query},
-                headers=headers,
-                timeout=15,
-            )
-            soup = BeautifulSoup(resp.text, "html.parser")
-            results = []
-            for a in soup.select("a.result-link")[:max_results]:
-                results.append({"title": a.get_text(strip=True), "url": a.get("href")})
+            resp = requests.post(url, data={"q": query}, headers=headers, timeout=15)
+            results = parse_links(resp.text, exclude)
             if results:
                 return results
         except requests.RequestException:
-            pass
+            continue
 
-    
-    try:
-        resp = requests.post(
-            "https://html.duckduckgo.com/html/",
-            data={"q": query},
-            headers=headers,
-            timeout=15,
-        )
-        soup = BeautifulSoup(resp.text, "html.parser")
-        results = []
-        for a in soup.select("a.result__a")[:max_results]:
-            results.append({"title": a.get_text(strip=True), "url": a.get("href")})
-        return results
-    except requests.RequestException as e:
-        return [{"title": "search failed", "url": "", "error": str(e)}]
+    return [{"title": "search returned no results", "url": ""}]
+
 
 MODEL = os.environ.get("AGENT_MODEL", "gpt-4o-mini")
 MAX_TURNS = int(os.environ.get("AGENT_MAX_TURNS", "12"))
@@ -142,7 +139,10 @@ Some conversations are multi-turn: a short back-and-forth. Always answer the LAS
 message, using earlier messages as context if relevant.
 
 You have three tools:
-- run_python: fetch, parse, and analyze data (pandas/numpy/requests available). Use \
+- run_python: fetch, parse, and analyze data (pandas/numpy/requests available, plus \
+  fetch_url(url) which is like requests.get but auto-retries with SSL verification \
+  relaxed if a government site's certificate chain is broken - prefer fetch_url over \
+  raw requests.get for .gov.in/.nic.in sites specifically). Use \
   print() or a trailing bare expression to inspect intermediate results. State \
   persists across calls, so work incrementally: fetch first, inspect the shape and \
   columns, then compute.
