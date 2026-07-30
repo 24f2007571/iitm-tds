@@ -54,6 +54,29 @@ def web_search(query, max_results=5):
 
     return [{"title": "search returned no results", "url": ""}]
 
+def wikipedia_search(query, max_results=5):
+    resp = requests.get(
+        "https://en.wikipedia.org/w/api.php",
+        params={
+            "action": "query",
+            "list": "search",
+            "srsearch": query,
+            "format": "json",
+            "srlimit": max_results,
+        },
+        headers={"User-Agent": "data-analyst-bot/1.0"},
+        timeout=15,
+    )
+    data = resp.json()
+    results = []
+    for item in data.get("query", {}).get("search", []):
+        title = item["title"]
+        results.append({
+            "title": title,
+            "url": f"https://en.wikipedia.org/wiki/{title.replace(' ', '_')}",
+        })
+    return results
+
 
 MODEL = os.environ.get("AGENT_MODEL", "gpt-4o-mini")
 MAX_TURNS = int(os.environ.get("AGENT_MAX_TURNS", "12"))
@@ -125,6 +148,26 @@ TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "wikipedia_search",
+            "description": (
+                "Search Wikipedia directly - much more reliable than general web_search "
+                "(never blocked, no captchas). Good first choice for factual/statistical "
+                "questions, including many India government-statistics topics, since "
+                "Wikipedia articles often include well-maintained data tables. Returns "
+                "a list of {title, url}."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Search query."}
+                },
+                "required": ["query"],
+            },
+        },
+    },
 ]
 
 SYSTEM_PROMPT = """You are a meticulous data-analyst agent, answering questions sent to you \
@@ -138,7 +181,7 @@ yourself. The message will also spell out the EXACT JSON shape expected for the 
 Some conversations are multi-turn: a short back-and-forth. Always answer the LAST \
 message, using earlier messages as context if relevant.
 
-You have three tools:
+You have four tools:
 - run_python: fetch, parse, and analyze data (pandas/numpy/requests available, plus \
   fetch_url(url) which is like requests.get but auto-retries with SSL verification \
   relaxed if a government site's certificate chain is broken - prefer fetch_url over \
@@ -146,6 +189,9 @@ You have three tools:
   print() or a trailing bare expression to inspect intermediate results. State \
   persists across calls, so work incrementally: fetch first, inspect the shape and \
   columns, then compute.
+- wikipedia_search: try this FIRST for factual/statistical questions - it's far more \
+  reliable than web_search (never blocked). Many India statistics topics have relevant \
+  Wikipedia tables. Fall back to web_search only if Wikipedia doesn't have it.  
 - web_search: find the correct current URL for a dataset before fetching it, instead of \
   guessing from memory. Guessed URLs are frequently dead or outdated — use this whenever \
   you're not 100% sure of the exact link.
@@ -251,7 +297,16 @@ def run_agent(history, logger):
                     "role": "tool",
                     "tool_call_id": tc.id,
                     "content": json.dumps(results)[:6000],
-                })    
+                })  
+            elif name == "wikipedia_search":
+                query = args.get("query", "")
+                results = wikipedia_search(query)
+                logger.log({"event": "wikipedia_search", "query": query, "results": results})
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc.id,
+                    "content": json.dumps(results)[:6000],
+                })        
             else:
                 messages.append({
                     "role": "tool",
