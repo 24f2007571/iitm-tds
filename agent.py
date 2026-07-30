@@ -210,7 +210,10 @@ You have four tools:
   (e.g. table.columns = [...] with the SAME number of columns as before).  
 - wikipedia_search: try this FIRST for factual/statistical questions - it's far more \
   reliable than web_search (never blocked). Many India statistics topics have relevant \
-  Wikipedia tables. Fall back to web_search only if Wikipedia doesn't have it.
+  Wikipedia tables. Fall back to web_search only if Wikipedia doesn't have it. As soon \
+  as wikipedia_search returns a clearly relevant article, immediately call run_python \
+  with fetch_wikipedia_tables on that article's URL - do not keep searching once you \
+  have a good candidate article.  
 - web_search: find the correct current URL for a dataset before fetching it, instead of \
   guessing from memory. Guessed URLs are frequently dead or outdated — use this whenever \
   you're not 100% sure of the exact link. NOTE: web_search frequently returns no \
@@ -226,7 +229,7 @@ Ground rules:
   (different URL, different parsing library, different data source) before giving up. \
   A ModuleNotFoundError is not a dead end - it just means try a different available \
   library or helper function (e.g. extract_pdf_text for PDFs, fetch_wikipedia_tables \
-  for Wikipedia) or a different source entirely.
+  for Wikipedia) or a different source entirely.  
 - Give up (submit an error) only after truly exhausting reasonable options - at least \
   2-3 different sources/approaches - not after a single library import fails.
 - Double-check your computation (e.g. re-derive a max/min, check a groupby result) \
