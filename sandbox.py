@@ -45,6 +45,8 @@ class PythonSandbox:
                 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
                 return requests.get(url, timeout=30, headers=headers, verify=False, **kwargs)
 
+           
+
         def extract_pdf_text(url):
             """Download a PDF and extract its text, page by page, using
             pdfplumber. Returns a single string with all pages concatenated
@@ -59,6 +61,15 @@ class PythonSandbox:
                     text_parts.append(f"--- page {i + 1} ---\n{page_text}")
             return "\n".join(text_parts)
 
+        def fetch_wikipedia_tables(url):
+                    """Fetch a Wikipedia page and return all its tables as a list of
+                    DataFrames. Handles the browser User-Agent Wikipedia requires
+                    automatically - use this instead of pd.read_html(url) directly,
+                    which will get a 403 Forbidden without the right headers."""
+                    resp = fetch_url(url)
+                    resp.raise_for_status()
+                    return pd.read_html(_io.StringIO(resp.text)) 
+
         self.globals = {
             "__builtins__": __builtins__,
             "pd": pd,
@@ -66,6 +77,7 @@ class PythonSandbox:
             "requests": requests,
             "fetch_url": fetch_url,
             "extract_pdf_text": extract_pdf_text,
+            "fetch_wikipedia_tables": fetch_wikipedia_tables,
             "json": json,
             "math": math,
             "re": re,

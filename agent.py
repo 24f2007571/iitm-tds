@@ -3,9 +3,11 @@ The data-analyst agent: a ReAct-style loop over an OpenAI-compatible chat model
 (configured for aipipe.org by default, since that's what the TDS course provides,
 but any OpenAI-compatible endpoint works - just change OPENAI_BASE_URL).
 
-The model has two tools:
-  - run_python:     execute code in a persistent sandbox (pandas/numpy/requests/etc)
-  - submit_answer:  end the loop and return the final answer value
+The model has four tools:
+  - run_python:       execute code in a persistent sandbox (pandas/numpy/requests/etc)
+  - web_search:       general web search (DuckDuckGo-backed)
+  - wikipedia_search:  direct Wikipedia search
+  - submit_answer:    end the loop and return the final answer value
 
 The caller (bot.py) is responsible for wrapping the returned answer into the
 final {"answer": ..., "log_url": ...} JSON the Telegram bot replies with.
@@ -13,6 +15,7 @@ final {"answer": ..., "log_url": ...} JSON the Telegram bot replies with.
 
 import json
 import os
+from urllib.parse import urlparse, parse_qs, unquote
 
 from openai import OpenAI
 
@@ -20,39 +23,80 @@ from sandbox import PythonSandbox
 import requests
 from bs4 import BeautifulSoup
 
+
 def web_search(query, max_results=5):
+    """Search the web via DuckDuckGo's lite/html endpoints (no API key needed).
+
+    DuckDuckGo wraps every outbound result link in a redirect like
+    //duckduckgo.com/l/?uddg=<url-encoded-destination>&rut=...
+    We unwrap that to get the real destination URL. (A previous version of
+    this function filtered out any link containing "duckduckgo.com" and also
+    required hrefs to start with "http" - since these redirect links are
+    protocol-relative ("//...") and live on duckduckgo.com, EVERY result was
+    being silently dropped, regardless of query. Fixed here.)
+    """
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
 
-    def parse_links(html, exclude_domain):
+    def resolve_url(href):
+        if href.startswith("//"):
+            href = "https:" + href
+        parsed = urlparse(href)
+        if "duckduckgo.com" in parsed.netloc and parsed.path == "/l/":
+            qs = parse_qs(parsed.query)
+            if "uddg" in qs:
+                return unquote(qs["uddg"][0])
+            return None  # some other duckduckgo.com internal link, not a result
+        return href
+
+    def parse_links(html):
         soup = BeautifulSoup(html, "html.parser")
         results = []
         seen = set()
         for a in soup.find_all("a", href=True):
-            href = a["href"]
-            if not href.startswith("http") or exclude_domain in href:
+            real_url = resolve_url(a["href"])
+            if not real_url or not real_url.startswith("http"):
                 continue
             title = a.get_text(strip=True)
-            if not title or href in seen:
+            if not title or real_url in seen:
                 continue
-            seen.add(href)
-            results.append({"title": title, "url": href})
+            seen.add(real_url)
+            results.append({"title": title, "url": real_url})
             if len(results) >= max_results:
                 break
         return results
 
-    for url, exclude in [
-        ("https://lite.duckduckgo.com/lite/", "duckduckgo.com"),
-        ("https://html.duckduckgo.com/html/", "duckduckgo.com"),
+    diagnostics = []  # only surfaced if every endpoint fails to yield results
+
+    for url in [
+        "https://lite.duckduckgo.com/lite/",
+        "https://html.duckduckgo.com/html/",
     ]:
         try:
             resp = requests.post(url, data={"q": query}, headers=headers, timeout=15)
-            results = parse_links(resp.text, exclude)
+            results = parse_links(resp.text)
+            diagnostics.append({
+                "endpoint": url,
+                "status_code": resp.status_code,
+                "response_length": len(resp.text),
+                "anchor_tag_count": resp.text.count("<a "),
+                "parsed_results": len(results),
+            })
             if results:
                 return results
-        except requests.RequestException:
+        except requests.RequestException as e:
+            diagnostics.append({"endpoint": url, "error": str(e)})
             continue
 
-    return [{"title": "search returned no results", "url": ""}]
+    # Every endpoint failed to yield results - surface WHY, so the JSONL log
+    # can distinguish "DDG blocked this IP / served a captcha" (status 200 but
+    # anchor_tag_count near 0, or status 403/429) from "parsing logic is wrong
+    # again" (status 200, normal anchor_tag_count, but parsed_results is 0).
+    return [{
+        "title": "search returned no results",
+        "url": "",
+        "diagnostics": diagnostics,
+    }]
+
 
 def wikipedia_search(query, max_results=5):
     resp = requests.get(
@@ -190,8 +234,8 @@ You have four tools:
   broken certificate chains. \
   (2) extract_pdf_text(url) - downloads a PDF and returns its full text. pd.read_pdf \
   does NOT exist and PyPDF2 is NOT installed - always use extract_pdf_text for PDFs. \
-  For Wikipedia tables specifically: fetch_url(url).text, then \
-  pd.read_html(io.StringIO(that_text)). \
+  For Wikipedia tables specifically, use fetch_wikipedia_tables(url) - do NOT call \
+  pd.read_html(url) directly, it will get a 403 Forbidden without the right headers. \
   Use print() or a trailing bare expression to inspect intermediate results. State \
   persists across calls, so work incrementally: fetch first, inspect the shape and \
   columns, then compute.
@@ -303,7 +347,7 @@ def run_agent(history, logger):
                     "role": "tool",
                     "tool_call_id": tc.id,
                     "content": json.dumps(results)[:6000],
-                })  
+                })
             elif name == "wikipedia_search":
                 query = args.get("query", "")
                 results = wikipedia_search(query)
@@ -312,7 +356,7 @@ def run_agent(history, logger):
                     "role": "tool",
                     "tool_call_id": tc.id,
                     "content": json.dumps(results)[:6000],
-                })        
+                })
             else:
                 messages.append({
                     "role": "tool",
