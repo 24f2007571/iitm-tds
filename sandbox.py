@@ -27,6 +27,11 @@ class PythonSandbox:
         import re
         import io as _io
         import datetime
+        import certifi
+        import os as _os
+
+        _os.environ.setdefault("SSL_CERT_FILE", certifi.where())
+        _os.environ.setdefault("REQUESTS_CA_BUNDLE", certifi.where())
 
         self.globals = {
             "__builtins__": __builtins__,

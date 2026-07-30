@@ -21,17 +21,42 @@ import requests
 from bs4 import BeautifulSoup
 
 def web_search(query, max_results=5):
-    resp = requests.post(
-        "https://html.duckduckgo.com/html/",
-        data={"q": query},
-        headers={"User-Agent": "Mozilla/5.0"},
-        timeout=15,
-    )
-    soup = BeautifulSoup(resp.text, "html.parser")
-    results = []
-    for a in soup.select("a.result__a")[:max_results]:
-        results.append({"title": a.get_text(strip=True), "url": a.get("href")})
-    return results
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+
+    # Try the lite endpoint first - plain text, less likely to be blocked
+    # from cloud/datacenter IPs than the full html.duckduckgo.com page.
+    for attempt in range(2):
+        try:
+            resp = requests.post(
+                "https://lite.duckduckgo.com/lite/",
+                data={"q": query},
+                headers=headers,
+                timeout=15,
+            )
+            soup = BeautifulSoup(resp.text, "html.parser")
+            results = []
+            for a in soup.select("a.result-link")[:max_results]:
+                results.append({"title": a.get_text(strip=True), "url": a.get("href")})
+            if results:
+                return results
+        except requests.RequestException:
+            pass
+
+    
+    try:
+        resp = requests.post(
+            "https://html.duckduckgo.com/html/",
+            data={"q": query},
+            headers=headers,
+            timeout=15,
+        )
+        soup = BeautifulSoup(resp.text, "html.parser")
+        results = []
+        for a in soup.select("a.result__a")[:max_results]:
+            results.append({"title": a.get_text(strip=True), "url": a.get("href")})
+        return results
+    except requests.RequestException as e:
+        return [{"title": "search failed", "url": "", "error": str(e)}]
 
 MODEL = os.environ.get("AGENT_MODEL", "gpt-4o-mini")
 MAX_TURNS = int(os.environ.get("AGENT_MAX_TURNS", "12"))
@@ -133,8 +158,14 @@ Ground rules:
   (different URL, different parsing) before giving up.
 - Double-check your computation (e.g. re-derive a max/min, check a groupby result) \
   before calling submit_answer.
-- If, after your best effort, you truly cannot get a reliable answer, submit your \
-  best estimate rather than an empty value - never leave the task unanswered.
+- If, after real, genuine attempts (web_search + run_python fetches) you still cannot \
+  retrieve actual data, you MUST NOT invent, simulate, or hard-code plausible-looking \
+  numbers or facts as a substitute for real data. This includes writing a Python dict/ \
+  DataFrame "based on known values" from memory - that is fabrication, not analysis, \
+  and is strictly forbidden even under time pressure.
+- If every reasonable data source fails, submit_answer with a clear error object (e.g. \
+  {"error": "could not retrieve data: <what failed>"}) instead of a fabricated value. \
+  An honest "could not verify" is far better than a confident-looking made-up number.
 """
 
 
